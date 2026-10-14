@@ -65,3 +65,5 @@ GoogleService-Info.plist
 *.sqlite
 *.sqlite3
 *.db
+# Generated build artifacts
+release/
