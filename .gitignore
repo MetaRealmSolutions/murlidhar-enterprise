@@ -41,3 +41,27 @@ example
 # generated native folders
 /ios
 /android
+
+# firebase admin credentials / local env (never commit)
+.env
+.env.local
+serviceAccountKey.json
+firebase-adminsdk-*.json
+*-service-account*.json
+service-account*.json
+
+# Environment secrets
+.env.*
+!.env.example
+
+# Firebase client configuration files
+google-services.json
+GoogleService-Info.plist
+
+# Signing credentials
+*.keystore
+
+# Local databases and client data
+*.sqlite
+*.sqlite3
+*.db

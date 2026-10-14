@@ -11,6 +11,10 @@
       ]
     }
   },
+  "exclude": [
+    "src/data/db/seed.ts",
+    "src/data/db/storage.ts"
+  ],
   "include": [
     "**/*.ts",
     "**/*.tsx",

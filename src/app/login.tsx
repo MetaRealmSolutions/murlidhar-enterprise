@@ -1,40 +1,89 @@
 import { useState } from 'react';
-import { Button, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 
-import { FAKE_USERS, useAuth } from '../auth/AuthContext';
+import { useAuth } from '../auth/AuthContext';
+import { Btn, T, TextField, useTheme } from '../components/controls';
+import { BUSINESS_NAME } from '../mock/data';
 
+// Firebase Authentication (email + password). The role is never chosen here: after sign-in the
+// app reads it from the user's Firestore profile and the route guards pick the right area.
 export default function LoginScreen() {
-  const { login } = useAuth();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { signIn, accessError } = useAuth();
+  const t = useTheme();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    if (!email.trim() || !password) return setError('Enter your email and password.');
+    setBusy(true);
+    const result = await signIn(email, password);
+    // On success the root layout's route guards take over once the profile has loaded.
+    if (!result.ok) setError(result.error);
+    setBusy(false);
+  };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Select user</Text>
-      {FAKE_USERS.map((u) => (
-        <Pressable
-          key={u.id}
-          onPress={() => setSelectedId(u.id)}
-          style={[styles.option, selectedId === u.id && styles.optionSelected]}>
-          <Text style={styles.optionText}>{u.name}</Text>
-        </Pressable>
-      ))}
-      <Button title="Login" disabled={!selectedId} onPress={() => selectedId && login(selectedId)} />
-    </View>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: t.bg }}
+      contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 16 }}
+      keyboardShouldPersistTaps="handled">
+      <View style={{ width: '100%', maxWidth: 440, gap: 28 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: t.accent, alignItems: 'center', justifyContent: 'center' }}>
+            <T size={20} weight="700" style={{ color: t.onAccent }}>
+              {BUSINESS_NAME.charAt(0)}
+            </T>
+          </View>
+          <T size={20} weight="600" style={{ letterSpacing: -0.3 }}>
+            {BUSINESS_NAME}
+          </T>
+        </View>
+
+        <View style={{ gap: 4 }}>
+          <T size={30} weight="700" style={{ letterSpacing: -0.6 }}>
+            Sign in
+          </T>
+          <T size={15} muted>
+            Owners and salesmen sign in here.
+          </T>
+        </View>
+
+        <View style={{ gap: 16 }}>
+          <TextField
+            label="Email"
+            value={email}
+            onChangeText={(v) => {
+              setEmail(v);
+              setError('');
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            autoComplete="email"
+            placeholder="name@example.com"
+            onSubmitEditing={submit}
+          />
+          <TextField
+            label="Password"
+            value={password}
+            onChangeText={(v) => {
+              setPassword(v);
+              setError('');
+            }}
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="current-password"
+            placeholder="Password"
+            error={error || accessError || undefined}
+            onSubmitEditing={submit}
+          />
+        </View>
+
+        <Btn title={busy ? 'Signing in…' : 'Sign in'} large fill onPress={submit} />
+      </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
-  title: { fontSize: 24, fontWeight: '600', marginBottom: 8 },
-  option: {
-    width: '100%',
-    maxWidth: 320,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#999',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  optionSelected: { borderColor: '#007AFF', backgroundColor: '#007AFF22' },
-  optionText: { fontSize: 16 },
-});

@@ -1,0 +1,304 @@
+rules_version = '2';
+
+// Murlidhar Enterprise: Firestore security rules.
+//
+// Identity:  request.auth.uid  ->  users/{uid}  ->  { role, active, salesmanId, permissions }
+// The role and permissions live in Firestore and are written ONLY by the owner (nobody can edit their own profile).
+//
+//   owner     everything, including users, roles, permissions and the Item Master (name, price, commission).
+//   employee  only what their three independent permissions switch on (all need an active profile):
+//               stockAccess         the Stock page: receipts (transactions ledger, parties, receipt payments) and warehouse stock
+//               privateBillsAccess  Private Bills (directBills) and the stock they take
+//               salesmenAccess      Salesmen: salesman records, daily bills, stock-given activity, the shared allocation counters
+//             An employee can read products but can never change a product's name, price, commission, order or active flag: the
+//             only product write allowed is a change of `stock` (and updatedAt) to a number >= 0, and only with a permission whose
+//             workflow moves stock.
+//   salesman  reads only active products, their own salesman record and their own bills (salesmen/{id}/dailyBills).
+//
+// Active schema:
+//   users/{uid}
+//   products/{productId}                                   .stock = warehouse stock
+//   salesmen/{salesmanId}
+//   salesmen/{salesmanId}/dailyBills/{yyyy-mm-dd}          working then final bill (one per salesman and business date)
+//   salesmen/{salesmanId}/activities/{activityId}          one record per product in each Save Stock Given (append-only)
+//   allocations/{productId}                                { outstanding }: units with salesmen (not yet sold)
+//   transactions/{yyyy-mm-dd}/entries/{transactionId}      stock receive ledger (append-only)
+//   parties/{mobile}, receiptPayments/{receiptId}, receiptPaymentEntries/{entryId} (supplier payments per receipt, append-only)
+//   directBills/{billId}                                   private bills (only the payment summary can change later)
+//   directBillPayments/{paymentId}                         payments against a private bill (append-only)
+//
+// NOT enforced here (rules cannot read other documents' quantities or do arithmetic across them): that stock changes equal the bill that
+// caused them, and that an allocation counter equals the sum of what salesmen hold. The app's transactions keep them consistent;
+// a user who may write products.stock or allocations can in principle write a wrong number. That is the residual trust placed in
+// anyone holding the matching permission.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ────────────────────────────────────────────────────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hasActiveProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && profile().active == true;
+    }
+    function isOwner() {
+      return hasActiveProfile() && profile().role == 'owner';
+    }
+    function isEmployee() {
+      return hasActiveProfile() && profile().role == 'employee';
+    }
+    function perm(key) {
+      return isEmployee() && profile().get('permissions', {}).get(key, false) == true;
+    }
+    function canStock() {
+      return isOwner() || perm('stockAccess');
+    }
+    function canPrivate() {
+      return isOwner() || perm('privateBillsAccess');
+    }
+    function canSalesmen() {
+      return isOwner() || perm('salesmenAccess');
+    }
+    function anyPage() {
+      return canStock() || canPrivate() || canSalesmen();
+    }
+    function isSalesman() {
+      return hasActiveProfile() && profile().role == 'salesman' && profile().salesmanId is string;
+    }
+    function mySalesmanId() {
+      return profile().salesmanId;
+    }
+    function isWholeQty(n) {
+      return n is int && n > 0;
+    }
+    function isMoney(n) {
+      return n is number && n >= 0;
+    }
+
+    // ── users/{uid}: only the owner writes, and only EMPLOYEE profiles. ───────────────────────
+    // An employee can read their own profile (to learn their permissions) but cannot write it, so cannot escalate.
+    function employeeProfile(d) {
+      return d.role == 'employee'
+        && d.name is string && d.name.size() > 0
+        && d.email is string && d.email.size() > 0
+        && d.active is bool
+        && d.permissions is map
+        && d.permissions.keys().hasOnly(['stockAccess', 'privateBillsAccess', 'salesmenAccess'])
+        && d.permissions.get('stockAccess', false) is bool
+        && d.permissions.get('privateBillsAccess', false) is bool
+        && d.permissions.get('salesmenAccess', false) is bool
+        && d.keys().hasOnly(['name', 'email', 'role', 'active', 'permissions', 'createdAt', 'updatedAt']);
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isOwner());
+      allow list: if isOwner();
+      allow create: if isOwner() && uid != request.auth.uid && employeeProfile(request.resource.data);
+      allow update: if isOwner() && resource.data.role == 'employee' && employeeProfile(request.resource.data)
+        && request.resource.data.email == resource.data.email;
+      allow delete: if false;
+    }
+
+    // ── products/{productId}: the Item Master. Owner manages; staff and salesmen read; an employee may only move stock. ──
+    function validProduct(d) {
+      return d.name is string && d.name.size() > 0
+        && isMoney(d.amount) && isMoney(d.commission)
+        // Minimum Stock: a whole number >= 0. Older products have none; the app reads that as 0.
+        && (!('minimumStock' in d) || (d.minimumStock is int && d.minimumStock >= 0))
+        && d.active is bool;
+    }
+    function stockOnlyChange() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
+        && request.resource.data.stock is number && request.resource.data.stock >= 0;
+    }
+    match /products/{productId} {
+      allow read: if anyPage() || (isSalesman() && resource.data.active == true);
+      allow create: if isOwner() && validProduct(request.resource.data);
+      allow update: if (isOwner() && validProduct(request.resource.data))
+        || (anyPage() && stockOnlyChange());
+      allow delete: if false;   // deactivate (active: false) instead
+    }
+
+    // ── salesmen/{salesmanId}: the salesman records (Salesman Master) and, under them, their bills and stock-given activity. ──
+    match /salesmen/{salesmanId} {
+      allow read: if canSalesmen() || (isSalesman() && salesmanId == mySalesmanId());
+      allow create, update: if canSalesmen()
+        && request.resource.data.name is string && request.resource.data.name.size() > 0
+        && request.resource.data.active is bool;
+      allow delete: if false;
+
+      // salesmen/{salesmanId}/dailyBills/{yyyy-mm-dd}: the bill of one business date (the date is the id), working then final.
+      match /dailyBills/{day} {
+        allow read: if canSalesmen() || (isSalesman() && salesmanId == mySalesmanId());
+        allow create, update: if canSalesmen()
+          && day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && request.resource.data.salesmanId == salesmanId
+          && request.resource.data.statementDay == day
+          && request.resource.data.businessDate == day
+          && request.resource.data.finalized is bool
+          && request.resource.data.status in ['open', 'finalized']
+          && request.resource.data.lines is list
+          && (request.resource.data.finalized == false || request.resource.data.finalizedBy == request.auth.uid);
+        allow delete: if false;
+      }
+
+      // salesmen/{salesmanId}/activities/{activityId}: one record per product in each Save Stock Given. Append-only.
+      match /activities/{activityId} {
+        allow read: if canSalesmen();
+        allow create: if canSalesmen()
+          && request.resource.data.type == 'STOCK_GIVEN'
+          && request.resource.data.salesmanId == salesmanId
+          && request.resource.data.activityId == activityId
+          && request.resource.data.businessDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && isWholeQty(request.resource.data.quantity)
+          && request.resource.data.productId is string
+          && request.resource.data.operationId is string;
+        allow update, delete: if false;
+      }
+    }
+
+    // The one listener over every salesman's bills (collection group query "dailyBills").
+    match /{path=**}/dailyBills/{day} {
+      allow read: if canSalesmen();
+    }
+
+    // ── allocations/{productId}: units of the product that are with salesmen. Written by the salesman workflows, read by them and by Private Bills. ──
+    match /allocations/{productId} {
+      allow read: if canSalesmen() || canPrivate();
+      allow create, update: if canSalesmen()
+        && request.resource.data.outstanding is number && request.resource.data.outstanding >= 0
+        && request.resource.data.keys().hasOnly(['outstanding', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // ── transactions/{yyyy-mm-dd}/entries/{id}: append-only stock receive ledger, filed under its business date. ──
+    function validTxBase(d) {
+      return d.productId is string
+        && isWholeQty(d.qty)
+        && d.at is string && d.date is string
+        && d.userId == request.auth.uid;
+    }
+    match /transactions/{day} {
+      // The date document is only a container: { date, updatedAt }.
+      allow read: if canStock();
+      allow create, update: if canStock()
+        && day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.keys().hasOnly(['date', 'updatedAt'])
+        && request.resource.data.date == day;
+      allow delete: if false;
+
+      match /entries/{txId} {
+        allow read: if canStock();
+        allow create: if canStock() && validTxBase(request.resource.data)
+          && request.resource.data.type == 'RECEIVE_STOCK'
+          && request.resource.data.businessDate == day
+          && request.resource.data.id == txId
+          && request.resource.data.partyName is string && request.resource.data.partyName.size() > 0
+          && request.resource.data.partyPhone is string && request.resource.data.partyPhone.size() > 0;
+        allow update, delete: if false;
+      }
+    }
+
+    // ── parties/{mobile}: who stock is received from. The document id IS the 10-digit mobile number. The name may be corrected; the number never changes. ──
+    match /parties/{partyId} {
+      allow read: if canStock();
+      allow create: if canStock()
+        && partyId.matches('^[0-9]{10}$')
+        && request.resource.data.mobile == partyId
+        && request.resource.data.name is string && request.resource.data.name.size() > 0;
+      allow update: if canStock()
+        && request.resource.data.mobile == resource.data.mobile
+        && request.resource.data.name is string && request.resource.data.name.size() > 0;
+      allow delete: if false;
+    }
+
+    // ── receiptPayments/{receiptId}: Paid / Unpaid of one stock receipt (no document = Unpaid). ──
+    match /receiptPayments/{receiptId} {
+      allow read: if canStock();
+      allow create, update: if canStock() && request.resource.data.paid is bool;
+      allow delete: if false;
+    }
+
+    // ── receiptPaymentEntries/{entryId}: one payment to the supplier against one stock receipt, written once and permanent. ──
+    match /receiptPaymentEntries/{entryId} {
+      allow read: if canStock();
+      allow create: if canStock()
+        && request.resource.data.receiptId is string
+        && request.resource.data.amount is number && request.resource.data.amount > 0
+        && request.resource.data.at is string
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── directBills/{billId}: private bills, created once; later only a payment or an edit (see update). ──
+    match /directBills/{billId} {
+      allow read: if canPrivate();
+      allow create: if canPrivate()
+        && request.resource.data.customerName is string
+        && request.resource.data.customerPhone is string
+        && request.resource.data.lines is list && request.resource.data.lines.size() > 0
+        && request.resource.data.total is number
+        && request.resource.data.userId == request.auth.uid;
+      // Later changes are either a payment (the payment summary may grow, never shrink, never above the total) or an edit of the bill
+      // (customer, lines, total and the figures that follow from it; paidAmount is untouched and the total may not drop below it).
+      allow update: if canPrivate() && (
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount', 'remainingAmount', 'paymentStatus'])
+          && request.resource.data.paidAmount is number
+          && request.resource.data.paidAmount > resource.data.get('paidAmount', 0)
+          && request.resource.data.paidAmount <= resource.data.total)
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerName', 'customerPhone', 'lines', 'total', 'remainingAmount', 'paymentStatus', 'updatedAt', 'updatedBy', 'lastEditId'])
+          && request.resource.data.customerName is string
+          && request.resource.data.customerPhone is string
+          && request.resource.data.lines is list && request.resource.data.lines.size() > 0
+          && request.resource.data.total is number
+          && request.resource.data.total >= resource.data.get('paidAmount', 0)
+          && request.resource.data.updatedBy == request.auth.uid)
+      );
+      allow delete: if false;
+    }
+
+    // ── expenses/{expenseId}: business expenses. The OWNER only (read, create, edit, delete); employees and salesmen have no access. ──
+    function validExpense(d) {
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && d.amount is number && d.amount > 0
+        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.notes is string && d.notes.size() <= 1000;
+    }
+    match /expenses/{expenseId} {
+      allow read: if isOwner();
+      allow create: if isOwner() && validExpense(request.resource.data)
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.createdAtIso is string;
+      // Only the editable fields change; who recorded it and when stay.
+      allow update: if isOwner() && validExpense(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'amount', 'date', 'notes', 'updatedAtIso', 'updatedBy'])
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if isOwner();
+    }
+
+    // ── directBillPayments/{paymentId}: one payment against a private bill, written once and permanent. ──
+    match /directBillPayments/{paymentId} {
+      allow read: if canPrivate();
+      allow create: if canPrivate()
+        && request.resource.data.billId is string
+        && request.resource.data.amount is number && request.resource.data.amount > 0
+        && request.resource.data.at is string
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── returns/{id}: LEGACY (the old physical-return flow). Owner can read old records only. ──
+    match /returns/{returnId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
