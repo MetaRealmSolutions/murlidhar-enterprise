@@ -1,11 +1,17 @@
 {
-  "name": "sales",
+  "name": "murlidhar-enterprise",
   "main": "expo-router/entry",
+  "electronMain": "electron/main.cjs",
   "version": "1.0.0",
+  "releaseVersion": "1.0",
+  "buildNumber": 1,
+  "private": true,
   "dependencies": {
     "@expo/ui": "~57.0.21",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.26",
+    "expo-asset": "~57.0.19",
+    "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.20",
     "expo-device": "~57.0.2",
     "expo-font": "~57.0.4",
@@ -31,6 +37,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3",
     "firebase-admin": "^14.5.0",
     "typescript": "~6.0.3"
   },
@@ -44,7 +52,34 @@
     "seed:users": "node --env-file-if-exists=.env.local scripts/seed-users.js",
     "seed:products": "node --env-file-if-exists=.env.local scripts/seed-products.js",
     "seed:ledger": "node --env-file-if-exists=.env.local scripts/seed-ledger.js",
-    "reconcile:stock": "node --env-file-if-exists=.env.local scripts/reconcile-stock.js"
+    "reconcile:stock": "node --env-file-if-exists=.env.local scripts/reconcile-stock.js",
+    "desktop:dev": "npx expo export --platform web && electron .",
+    "desktop:build": "npx expo export --platform web && electron-builder --win nsis"
   },
-  "private": true
+  "build": {
+    "appId": "com.murlidharenterprise.desktop",
+    "productName": "Murlidhar Enterprise",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "assets/branding/windows-icon.png",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "win": {
+      "icon": "assets/branding/windows-icon.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
 }

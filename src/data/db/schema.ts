@@ -47,6 +47,11 @@ export type Product = {
   minimumStock?: number;
   /** Opening warehouse stock (products/{id}.stock). Later Receive Stock entries are added on top. */
   stock: number;
+  /** The opening count the owner last saved (already the product's `stock`, which stays the only balance). Absent = not entered yet; 0 = an intentional zero. Set when a product is added with a quantity, or by Item Master → Opening Stock. */
+  openingStock?: number;
+  /** ISO time and user id of the last save. */
+  openingStockAt?: string;
+  openingStockBy?: string;
   /** Display order in the Item Master (an order number, not the identity). Older items have none until the list is first reordered. */
   serial: number;
   active: boolean;

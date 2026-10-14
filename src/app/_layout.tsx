@@ -1,4 +1,5 @@
 import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import Head from 'expo-router/head';
 
 import { AuthProvider, useAuth } from '../auth/AuthContext';
 import { LoadingScreen } from '../components/data-gate';
@@ -28,6 +29,9 @@ function RootStack() {
 export default function RootLayout() {
   return (
     <ThemeProvider value={DefaultTheme}>
+      <Head>
+        <title>Murlidhar Enterprise</title>
+      </Head>
       <AuthProvider>
         <RootStack />
       </AuthProvider>

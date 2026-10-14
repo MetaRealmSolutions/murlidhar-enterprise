@@ -13,7 +13,8 @@
   },
   "exclude": [
     "src/data/db/seed.ts",
-    "src/data/db/storage.ts"
+    "src/data/db/storage.ts",
+    "scripts/opening-stock.test.ts"
   ],
   "include": [
     "**/*.ts",

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { useAuth } from '../auth/AuthContext';
+import { BrandLogo } from '../components/brand-logo';
 import { Btn, T, TextField, useTheme } from '../components/controls';
 import { BUSINESS_NAME } from '../mock/data';
 
@@ -32,11 +33,7 @@ export default function LoginScreen() {
       keyboardShouldPersistTaps="handled">
       <View style={{ width: '100%', maxWidth: 440, gap: 28 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: t.accent, alignItems: 'center', justifyContent: 'center' }}>
-            <T size={20} weight="700" style={{ color: t.onAccent }}>
-              {BUSINESS_NAME.charAt(0)}
-            </T>
-          </View>
+          <BrandLogo height={56} />
           <T size={20} weight="600" style={{ letterSpacing: -0.3 }}>
             {BUSINESS_NAME}
           </T>

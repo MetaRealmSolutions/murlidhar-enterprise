@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { RequireAccess } from '../../components/require-access';
-import { View } from 'react-native';
+import { TextInput, View } from 'react-native';
 
 import { Btn, SearchIcon, T, TextAction, TextField, useTheme } from '../../components/controls';
 import { Page, SimpleTable, usePageMetrics, type Col } from '../../components/page';
 import { Sheet } from '../../components/sheet';
-import { addProduct, deleteProduct, moveProduct, updateProduct, useProducts, type Product } from '../../data/repository';
+import { addProduct, deleteProduct, initializeOpeningStock, moveProduct, newOpeningSubmissionId, updateProduct, useOutstandingByProduct, useProducts, type Product } from '../../data/repository';
+import { focusAfterSave, openingRowView } from '../../data/opening-stock';
 import { rupees } from '../../mock/data';
 
 const digits = (s: string) => s.replace(/[^0-9]/g, '');
@@ -146,6 +147,15 @@ function ConfirmDelete({ name, onCancel, onConfirm }: { name: string; onCancel: 
 function ProductsScreen() {
   const { phone } = usePageMetrics();
   const products = useProducts();
+  const t = useTheme();
+  const withSalesmen = useOutstandingByProduct();
+  // Opening Stock: the typed count per product (kept until that product is saved), per-row and overall feedback, and which rows are saving.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [rowMsg, setRowMsg] = useState<Record<string, { ok: boolean; text: string } | null>>({});
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // One id per product's pending save, kept until it succeeds (see saveRows).
+  const submissionIds = useRef<Record<string, { key: string; id: string }>>({});
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
   const [deleting, setDeleting] = useState<FormState | null>(null);
@@ -164,6 +174,129 @@ function ProductsScreen() {
     return [...out].sort((a, b) => (key === 'name' ? dir * byName(a, b) : dir * (a[key] - b[key]) || byName(a, b)));
   }, [products, search, sort]);
   const head = (key: SortKey): Pick<Col<Product>, 'onHeaderPress' | 'sort'> => ({ onHeaderPress: () => sortBy(key), sort: sort?.key === key ? sort.dir : null });
+
+  // Opening Stock (initial inventory). `stock` is the balance; the count the owner types and saves REPLACES it, whatever the product's history.
+  const view = (p: Product) => openingRowView(p, drafts[p.id]);
+  const pendingRows = products.filter((p) => view(p).pending);
+  const busy = savingIds.size > 0;
+  // Row inputs by stable product id (never by row index), and the rows as currently listed, for Enter-to-next (focus only, never a save).
+  const inputs = useRef(new Map<string, TextInput>());
+  const orderRef = useRef<string[]>([]);
+  orderRef.current = list.map((p) => p.id);
+
+  const edited = (p: Product, v: string) => {
+    setDrafts((d) => ({ ...d, [p.id]: digits(v) }));
+    setRowMsg((m) => (m[p.id] ? { ...m, [p.id]: null } : m));
+    setNotice(null);
+  };
+
+  /**
+   * Saves these rows now. Each is its own awaited transaction, so a row is reported saved only after it committed, one failure never blocks the
+   * others, and the typed counts of every other row stay as they are. The submission id belongs to the exact count being saved and is kept until
+   * it succeeds, so pressing Save again after a failure or a dropped connection can never apply the same count twice.
+   * Returns each row's outcome (nothing while another save is running).
+   */
+  const saveRows = async (rows: Product[]): Promise<Record<string, boolean> | null> => {
+    if (busy || rows.length === 0) return null;
+    const outcome: Record<string, boolean> = {};
+    const bad: Record<string, { ok: boolean; text: string }> = {};
+    const valid = rows.filter((p) => {
+      if (view(p).valid) return true;
+      outcome[p.id] = false;
+      bad[p.id] = { ok: false, text: 'Enter a whole number of 0 or more.' };
+      return false;
+    });
+    setRowMsg((m) => ({ ...m, ...bad }));
+    if (valid.length === 0) return outcome;
+    setSavingIds(new Set(valid.map((p) => p.id)));
+    setNotice(null);
+    const results = await initializeOpeningStock(
+      valid.map((p) => {
+        const counted = Number(drafts[p.id]);
+        const key = String(counted);
+        const kept = submissionIds.current[p.id];
+        const entry = kept && kept.key === key ? kept : { key, id: newOpeningSubmissionId() };
+        submissionIds.current[p.id] = entry;
+        return { id: p.id, counted, submissionId: entry.id };
+      }),
+    );
+    const saved = valid.filter((p) => results[p.id]?.ok).map((p) => p.id);
+    for (const id of saved) delete submissionIds.current[id];
+    for (const p of valid) outcome[p.id] = results[p.id]?.ok === true;
+    setDrafts((d) => Object.fromEntries(Object.entries(d).filter(([id]) => !saved.includes(id))));
+    setRowMsg((m) => ({
+      ...m,
+      ...Object.fromEntries(
+        valid.map((p) => {
+          const r = results[p.id];
+          return [p.id, r?.ok ? { ok: true, text: 'Saved' } : { ok: false, text: r && !r.ok ? r.error : 'Unable to save.' }];
+        }),
+      ),
+    }));
+    setSavingIds(new Set());
+    if (rows.length > 1) {
+      const failed = valid.length - saved.length + Object.keys(bad).length;
+      setNotice(failed === 0 ? { ok: true, text: `Opening stock saved for ${saved.length} items.` } : { ok: false, text: `${saved.length} saved, ${failed} not saved. See the highlighted rows.` });
+    }
+    return outcome;
+  };
+
+  /** Enter: only moves to the next row's input. It never saves; the typed value stays an unsaved change until Save or Save All is pressed. */
+  const focusNextRow = (p: Product) => {
+    const next = focusAfterSave(orderRef.current, p.id, true, (id) => inputs.current.has(id));
+    const box = next ? inputs.current.get(next) : undefined;
+    if (!box) return; // last input: nothing happens
+    box.focus();
+    // The browser scrolls a focused field into view; this also centres it (a no-op where there is no DOM).
+    (box as unknown as { scrollIntoView?: (o: object) => void }).scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  };
+
+  const stockCell = (p: Product) => {
+    const saving = savingIds.has(p.id);
+    const msg = rowMsg[p.id];
+    const v = view(p);
+    return (
+      <View style={{ gap: 3, paddingVertical: 4, alignItems: 'flex-end' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {saving ? (
+            <T size={12} muted>
+              Saving…
+            </T>
+          ) : v.pending ? (
+            <TextAction title="Save" label={`Save opening stock for ${p.name}`} onPress={() => saveRows([p])} />
+          ) : null}
+          <TextInput
+            ref={(el) => {
+              if (el) inputs.current.set(p.id, el);
+              else inputs.current.delete(p.id);
+            }}
+            value={v.value}
+            onChangeText={(x) => edited(p, x)}
+            editable={!saving}
+            keyboardType="number-pad"
+            inputMode="numeric"
+            returnKeyType="next"
+            blurOnSubmit={false}
+            selectTextOnFocus
+            accessibilityLabel={`Opening stock for ${p.name}`}
+            onSubmitEditing={() => focusNextRow(p)}
+            style={{ width: phone ? 60 : 84, height: 36, borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, fontSize: 15, color: t.text, backgroundColor: v.pending ? t.subtle : t.surface, borderColor: msg && !msg.ok ? t.danger : v.pending ? t.accent : t.borderStrong, textAlign: 'right', outlineStyle: 'none' } as object}
+          />
+        </View>
+        {msg ? (
+          <T size={11} style={{ color: msg.ok ? t.success : t.danger }}>
+            {msg.text}
+            {msg.ok ? ` · stock now ${p.stock}` : ''}
+          </T>
+        ) : (
+          <T size={11} muted>
+            {v.pending ? 'Unsaved · ' : v.saved ? `Saved ${p.openingStock} · ` : 'Not entered · '}Stock now {p.stock}
+            {(withSalesmen[p.id] ?? 0) > 0 ? ` · ${withSalesmen[p.id]} with salesmen (part of this stock)` : ''}
+          </T>
+        )}
+      </View>
+    );
+  };
 
   const openAdd = () => setForm({ id: null, name: '', amount: '', commission: '', minimumStock: '0', stock: '', serial: '' });
   const openEdit = (p: Product) => setForm({ id: p.id, name: p.name, amount: String(p.amount), commission: String(p.commission), minimumStock: String(p.minimumStock ?? 0), stock: '', serial: String(position.get(p.id) ?? '') });
@@ -195,23 +328,37 @@ function ProductsScreen() {
   const edit = (p: Product) => <TextAction title="Edit" label={`Edit ${p.name}`} onPress={() => openEdit(p)} />;
 
   return (
-    <Page title="Item Master" actions={<Btn title="+ Add Item" fill={phone} onPress={openAdd} />}>
+    <Page
+      title="Item Master"
+      actions={
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Btn title={busy ? 'Saving…' : pendingRows.length > 0 ? `Save All (${pendingRows.length})` : 'Save All'} variant="secondary" disabled={busy || pendingRows.length === 0} onPress={() => saveRows(pendingRows)} />
+          <Btn title="+ Add Item" fill={phone} onPress={openAdd} />
+        </View>
+      }>
       <View style={{ maxWidth: phone ? undefined : 480 }}>
         <TextField label="" accessibilityLabel="Search items" value={search} onChangeText={setSearch} placeholder="Search items..." leading={<SearchIcon />} autoCorrect={false} autoCapitalize="none" />
       </View>
+      {notice ? (
+        <T size={13} style={{ color: notice.ok ? t.success : t.danger }}>
+          {notice.text}
+        </T>
+      ) : null}
       <SimpleTable
         columns={
           phone
             ? [
-                { label: 'Sr.', width: 40, render: (p) => String(position.get(p.id)) },
+                { label: 'Sr.', width: 52, render: (p) => String(position.get(p.id)) },
                 { label: 'Item', weight: '500', render: (p) => p.name, ...head('name') },
+                { label: 'Opening Stock', width: 132, align: 'right', action: true, render: stockCell },
                 { label: 'Amount', width: 78, align: 'right', render: (p) => rupees(p.amount), ...head('amount') },
                 { label: 'Comm.', width: 80, align: 'right', render: (p) => rupees(p.commission), ...head('commission') },
-                { label: 'Edit', width: 44, align: 'right', render: edit },
+                { label: 'Edit', width: 64, align: 'right', render: edit },
               ]
             : [
                 { label: 'Sr. No.', width: 80, render: (p) => String(position.get(p.id)) },
                 { label: 'Item', weight: '500', render: (p) => p.name, ...head('name') },
+                { label: 'Opening Stock', width: 200, align: 'right', action: true, render: stockCell },
                 { label: 'Amount', width: 140, align: 'right', render: (p) => rupees(p.amount), ...head('amount') },
                 { label: 'Commission', width: 150, align: 'right', render: (p) => rupees(p.commission), ...head('commission') },
                 { label: 'Edit', width: 80, align: 'right', render: edit },
@@ -219,6 +366,8 @@ function ProductsScreen() {
         }
         rows={list}
         keyOf={(p) => p.id}
+        minWidth={phone ? 540 : undefined}
+        grid
         empty={{ title: 'No products found.', note: 'Try another product name, or add a product.' }}
       />
       {form && (

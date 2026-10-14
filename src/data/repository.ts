@@ -11,11 +11,12 @@ import { EditRefused, NotEnoughStockForBill, PaymentRefused, editDirectBillTrans
 import { recordReceipt, writePartyName } from './firebase/repositories/parties';
 import { businessDate } from './business-date';
 import { ReceiptPaymentRefused, recordReceiptPaymentTransaction, writeReceiptPaid } from './firebase/repositories/receiptPayments';
-import { batchAdjustStock, batchCreateProduct, batchSetSerial, batchUpdateProduct, newBatch, productIdFor } from './firebase/repositories/products';
+import { OpeningStockRefused, batchAdjustStock, batchCreateProduct, batchSetSerial, batchUpdateProduct, newBatch, productIdFor, initializeOpeningStockTransaction } from './firebase/repositories/products';
 import { createLogin, isEmailInUse, sendReset } from './firebase/employee-auth';
 import { updateEmployeeProfile, writeEmployeeProfile } from './firebase/repositories/users';
 import { archiveSalesman, writeSalesman } from './firebase/repositories/salesmen';
 import { type Shortage, correctFinalizedSettlement, getActivities, getFinalizedBills, giveStockTransaction, type Activity, NotEnoughStock, setSettlementWithStock, settlementId } from './firebase/repositories/settlements';
+import { runInitialization } from './opening-stock';
 import { correctionUnitValues } from './correction-pricing';
 import { buildStatement, localDate, todayISO, type Statement } from './statements';
 
@@ -260,7 +261,7 @@ export async function addProduct(input: { name: string; amount: number; commissi
     return commit(batch, 'Unable to save product.');
   }
   const ids = insertAt(orderedIds(), id, input.position);
-  batchCreateProduct(batch, id, { name, amount: input.amount, commission: input.commission, minimumStock: input.minimumStock, stock: input.openingStock, serial: ids.indexOf(id) + 1 });
+  batchCreateProduct(batch, id, { name, amount: input.amount, commission: input.commission, minimumStock: input.minimumStock, stock: input.openingStock, serial: ids.indexOf(id) + 1, initializedBy: actor() });
   resequence(batch, ids, id);
   return commit(batch, 'Unable to save product.');
 }
@@ -273,6 +274,40 @@ export async function updateProduct(id: string, input: { name: string; amount: n
   const batch = newBatch();
   batchUpdateProduct(batch, id, { name: input.name.trim(), amount: input.amount, commission: input.commission, minimumStock: input.minimumStock, active: input.active });
   return commit(batch, 'Unable to save product.');
+}
+
+/** Units of each product that are with salesmen right now (not yet sold), for showing next to the warehouse stock. Read-only. */
+export function useOutstandingByProduct(): StockMap {
+  const db = useDatabase();
+  return useMemo(() => outstandingByProduct(db), [db]);
+}
+
+/** A fresh id for one save of a count. Keep it while retrying the same count: it is what makes a retry harmless. */
+export const newOpeningSubmissionId = () => newId('os');
+
+/**
+ * Opening Stock (Item Master), the initial inventory exercise: the quantity the owner enters and saves IS the product's main warehouse
+ * stock. It REPLACES `products.stock` (a count of 100 on a balance of 50 gives 100, not 150) and is never reduced by salesman allocations or
+ * adjusted by history. Receipts, bills, returns and allocations are neither blocked by it nor rewritten by it. The owner can save a product
+ * again to correct it, one product or many, over as many days as it takes. Each product is its own awaited transaction (one refusal never
+ * blocks the others, and a product is reported saved only after it committed).
+ */
+export async function initializeOpeningStock(items: { id: string; counted: number; submissionId: string }[]): Promise<Record<string, Result>> {
+  if (!ownerOnly()) return Object.fromEntries(items.map((i) => [i.id, OWNER_ONLY]));
+  const known = new Map(getDatabase().products.filter((p) => p.active).map((p) => [p.id, p]));
+  const out: Record<string, Result> = {};
+  const todo: typeof items = [];
+  for (const item of items) {
+    if (!known.has(item.id)) out[item.id] = { ok: false, error: 'This product no longer exists.' };
+    else if (!Number.isSafeInteger(item.counted) || item.counted < 0) out[item.id] = { ok: false, error: 'Enter a whole number of 0 or more.' };
+    else todo.push(item);
+  }
+  const done = await runInitialization(
+    todo,
+    (item) => initializeOpeningStockTransaction(item.id, { counted: item.counted, submissionId: item.submissionId }, actor()),
+    (e) => (e instanceof OpeningStockRefused ? e.message : friendlyError(e, 'Unable to save the opening stock.')),
+  );
+  return { ...out, ...done };
 }
 
 /** Moves an item to `position` (1-based) in the Item Master order; the items in between shift by one. */

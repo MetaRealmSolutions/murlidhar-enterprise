@@ -13,6 +13,11 @@ export const rupees = (n: number) => `₹${num(n)}`;
 
 export const BUSINESS_NAME = 'Murlidhar Enterprise';
 
+/** The client's business details, as printed on the bill. One place, so Settings and the Private Bill print can never disagree. */
+export const BUSINESS_GSTIN = '24AXSPA2573M1Z5';
+export const BUSINESS_PHONES = ['9909071340', '9909771340', '9909271340'];
+export const BUSINESS_ADDRESS = 'Mandvi - Bhuj Highway Road, Mandvi-Kutch, Gujarat - 370465';
+
 // Visual switch only: the data shown elsewhere does not change per business.
 export const businesses = [
   { id: 'b1', name: 'Murlidhar Enterprise', place: 'Mandvi' },

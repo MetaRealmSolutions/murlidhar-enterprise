@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth/AuthContext';
 import { can, isOwner, type Area } from '../auth/access';
 import { BUSINESS_NAME } from '../mock/data';
+import { BrandLogo } from './brand-logo';
 import { T, useTheme } from './controls';
 import { MenuDivider, MenuItem, Popover } from './popover';
 
@@ -102,19 +103,7 @@ export function Brand() {
   const t = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <View
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          backgroundColor: t.accent,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
-        <T size={16} weight="700" style={{ color: t.onAccent }}>
-          {BUSINESS_NAME.charAt(0)}
-        </T>
-      </View>
+      <BrandLogo height={34} />
       <T size={17} weight="600" numberOfLines={1} style={{ letterSpacing: -0.2 }}>
         {BUSINESS_NAME}
       </T>
