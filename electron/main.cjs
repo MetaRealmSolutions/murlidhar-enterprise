@@ -3,6 +3,7 @@ const { app, BrowserWindow, shell } = require("electron");
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { initUpdater } = require("./updater.cjs");
 
 const distDir = path.join(__dirname, "../dist");
 
@@ -104,6 +105,7 @@ async function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
@@ -121,7 +123,10 @@ async function createWindow() {
   await mainWindow.loadURL(localUrl);
 }
 
-app.whenReady().then(createWindow).catch((error) => {
+app.whenReady().then(() => {
+  initUpdater(() => mainWindow);
+  return createWindow();
+}).catch((error) => {
   console.error("Unable to start Murlidhar Enterprise:", error);
   app.quit();
 });

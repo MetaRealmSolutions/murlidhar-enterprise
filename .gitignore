@@ -67,3 +67,10 @@ GoogleService-Info.plist
 *.db
 # Generated build artifacts
 release/
+
+# Local service-account keys, stray tool output, installer artifacts
+*serviceAccountKey*
+*.exe
+*.blockmap
+*.asar
+-files*

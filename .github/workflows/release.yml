@@ -1,0 +1,55 @@
+name: Release Windows
+
+# Runs only for explicit version tags (v1.1.0, v1.2.0, ...). Ordinary pushes never publish.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Tag must match package.json version
+        shell: bash
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "v$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version v$pkg" >&2
+            exit 1
+          fi
+      - run: npx tsc --noEmit
+
+  publish:
+    needs: validate
+    runs-on: windows-latest
+    environment: release # add required reviewers on this environment for a manual approval gate
+    permissions:
+      contents: write # create the release and upload assets with the built-in GITHUB_TOKEN
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build and publish installer + latest.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run desktop:release
+      - name: Record build
+        shell: bash
+        run: echo "Published $GITHUB_REF_NAME from $GITHUB_SHA (run $GITHUB_RUN_ID)" >> "$GITHUB_STEP_SUMMARY"

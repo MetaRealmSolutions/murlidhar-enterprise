@@ -9,6 +9,7 @@
   "dependencies": {
     "@expo/ui": "~57.0.21",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "electron-updater": "^6.8.9",
     "expo": "~57.0.26",
     "expo-asset": "~57.0.19",
     "expo-clipboard": "~57.0.2",
@@ -54,7 +55,9 @@
     "seed:ledger": "node --env-file-if-exists=.env.local scripts/seed-ledger.js",
     "reconcile:stock": "node --env-file-if-exists=.env.local scripts/reconcile-stock.js",
     "desktop:dev": "npx expo export --platform web && electron .",
-    "desktop:build": "npx expo export --platform web && electron-builder --win nsis"
+    "desktop:build": "npx expo export --platform web && electron-builder --win nsis --x64 --publish never",
+    "desktop:release": "npx expo export --platform web && electron-builder --win nsis --x64 --publish always",
+    "typecheck": "tsc --noEmit"
   },
   "build": {
     "appId": "com.murlidharenterprise.desktop",
@@ -74,12 +77,24 @@
     "win": {
       "icon": "assets/branding/windows-icon.png",
       "target": [
-        "nsis"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Murlidhar-Enterprise-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "MetaRealmSolutions",
+      "repo": "murlidhar-enterprise",
+      "releaseType": "release"
     }
   }
 }

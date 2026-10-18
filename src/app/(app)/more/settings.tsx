@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, View } from 'react-native';
 
 import { useAuth } from '../../../auth/AuthContext';
+import { AppUpdater } from '../../../components/app-updater';
 import { Btn, T, TextAction, useTheme } from '../../../components/controls';
 import { InfoRow, Page, SectionTitle, usePageMetrics } from '../../../components/page';
 import { APP_NAME, BUILD_NUMBER, DEVELOPER, PACKAGE_VERSION, RELEASE_VERSION } from '../../../constants/app-info';
@@ -72,6 +73,7 @@ export default function SettingsScreen() {
           <InfoRow label="Package version" value={PACKAGE_VERSION} />
           <InfoRow label="Build number" value={String(BUILD_NUMBER)} />
         </View>
+        <AppUpdater />
       </View>
 
       <View style={{ gap: 4 }}>
