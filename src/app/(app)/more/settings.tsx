@@ -72,8 +72,6 @@ export default function SettingsScreen() {
           <InfoRow label="Release" value={RELEASE_VERSION} />
           <InfoRow label="Package version" value={PACKAGE_VERSION} />
           <InfoRow label="Build number" value={String(BUILD_NUMBER)} />
-          {/* Temporary: remove after the 1.0 -> 1.1 updater test is verified. */}
-          <InfoRow label="Update test build 1.1" value="Delivered by auto-update" />
         </View>
         <AppUpdater />
       </View>

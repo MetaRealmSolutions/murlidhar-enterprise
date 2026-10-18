@@ -45,7 +45,10 @@ async function checkForUpdates() {
 function installUpdate() {
   // Only the supported updater workflow installs, and only once the download has finished.
   if (state.status !== "downloaded") return false;
-  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  // Silent (/S) keeps the update unattended: the NSIS installer skips its scope and directory pages and
+  // reuses the existing install's scope and InstallLocation from the registry (per-machine updates
+  // elevate themselves). Force-run relaunches the app afterwards.
+  setImmediate(() => autoUpdater.quitAndInstall(true, true));
   return true;
 }
 

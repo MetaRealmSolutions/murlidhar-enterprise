@@ -2,9 +2,9 @@
   "name": "murlidhar-enterprise",
   "main": "expo-router/entry",
   "electronMain": "electron/main.cjs",
-  "version": "1.1.0",
-  "releaseVersion": "1.1",
-  "buildNumber": 2,
+  "version": "1.2.0",
+  "releaseVersion": "1.2",
+  "buildNumber": 3,
   "private": true,
   "dependencies": {
     "@expo/ui": "~57.0.21",

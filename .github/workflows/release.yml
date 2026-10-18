@@ -46,10 +46,30 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # electron-builder uploads the installer and blockmap concurrently and each upload creates its own
+      # GitHub release when none exists (duplicate v1.1.0 releases). Creating the release first means every
+      # upload finds and reuses this one.
+      - name: Create the release once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --verify-tag --notes "Murlidhar Enterprise ${GITHUB_REF_NAME#v}"
       - name: Build and publish installer + latest.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run desktop:release
+      - name: Verify a single complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "[.[] | select(.tag_name == \"$GITHUB_REF_NAME\")] | length")"
+          if [ "$count" != "1" ]; then echo "Expected 1 release for $GITHUB_REF_NAME, found $count" >&2; exit 1; fi
+          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          echo "$assets"
+          for pattern in 'Setup-.*\.exe$' 'Setup-.*\.exe\.blockmap$' '^latest\.yml$'; do
+            echo "$assets" | grep -Eq "$pattern" || { echo "Missing asset matching $pattern" >&2; exit 1; }
+          done
       - name: Record build
         shell: bash
         run: echo "Published $GITHUB_REF_NAME from $GITHUB_SHA (run $GITHUB_RUN_ID)" >> "$GITHUB_STEP_SUMMARY"
