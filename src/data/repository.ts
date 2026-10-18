@@ -17,6 +17,7 @@ import { updateEmployeeProfile, writeEmployeeProfile } from './firebase/reposito
 import { archiveSalesman, writeSalesman } from './firebase/repositories/salesmen';
 import { type Shortage, correctFinalizedSettlement, getActivities, getFinalizedBills, giveStockTransaction, type Activity, NotEnoughStock, setSettlementWithStock, settlementId } from './firebase/repositories/settlements';
 import { runInitialization } from './opening-stock';
+import { receiptTotal } from './receipt-total';
 import { correctionUnitValues } from './correction-pricing';
 import { buildStatement, localDate, todayISO, type Statement } from './statements';
 
@@ -459,15 +460,23 @@ export async function recordReceiptPayment(receiptId: string, amount: number, su
 }
 
 /** Party → warehouse. Every receipt keeps the party's name and number for the Stock Receive statement. `payment` is what the receipt cost and how much of it was paid now. */
-export async function receiveStock(party: { name: string; phone: string }, items: Item[], payment: { total: number; paid: number }, submissionId?: string): Promise<Result> {
+export async function receiveStock(party: { name: string; phone: string }, items: (Item & { price: number })[], payment: { paid: number }, submissionId?: string): Promise<Result> {
   const partyName = party.name.trim();
   if (!partyName) return { ok: false, error: 'Enter the party name.' };
   const mobile = validMobile(party.phone);
   if (!mobile) return { ok: false, error: MOBILE_ERROR };
   if (items.length === 0 || items.some((i) => !whole(i.qty))) return BAD_ITEMS;
-  if (!Number.isFinite(payment.total) || payment.total <= 0) return { ok: false, error: 'Enter the Total Purchase Amount.' };
+  // The purchase price is typed by hand for every product received (never the Item Master selling price). The receipt total is the sum of the
+  // row totals (price x quantity, in whole paise), worked out here from the same lines that are saved, so the two can never differ.
+  const priceOf = new Map<string, number>();
+  for (const i of items) {
+    if (!Number.isFinite(i.price) || i.price <= 0 || Math.round(i.price * 100) / 100 !== i.price) return { ok: false, error: 'Enter a purchase price above 0 (up to 2 decimals) for every product received.' };
+    if (priceOf.has(i.id) && priceOf.get(i.id) !== i.price) return { ok: false, error: 'A product is repeated with different purchase prices.' };
+    priceOf.set(i.id, i.price);
+  }
+  const total = receiptTotal(items.map((i) => ({ price: i.price, qty: i.qty })));
   if (!Number.isFinite(payment.paid) || payment.paid < 0) return { ok: false, error: 'Paid Amount cannot be negative.' };
-  if (cents(payment.paid) > cents(payment.total)) return { ok: false, error: 'Paid Amount cannot be more than the Total Purchase Amount.' };
+  if (cents(payment.paid) > cents(total)) return { ok: false, error: 'Paid Amount cannot be more than the Total Purchase Amount.' };
   const db = getDatabase();
   const known = new Set(db.products.map((p) => p.id));
   if (items.some((i) => !known.has(i.id))) return { ok: false, error: 'A product in this list no longer exists.' };
@@ -485,6 +494,7 @@ export async function receiveStock(party: { name: string; phone: string }, items
     businessDate: businessDate(at),
     productId: i.id,
     qty: i.qty,
+    purchasePrice: priceOf.get(i.id),
     userId: actor(),
     stockApplied: true,
     receiptId,
@@ -497,7 +507,7 @@ export async function receiveStock(party: { name: string; phone: string }, items
   for (const i of merged) stock[i.id] = i.qty;
   try {
     // Awaited as it is, with no timeout: success is reported only once Firestore has committed the transaction.
-    await recordReceipt({ id: mobile, name: partyName }, txs, stock, { receiptId, totalAmount: cents(payment.total), paidAmount: cents(payment.paid), at });
+    await recordReceipt({ id: mobile, name: partyName }, txs, stock, { receiptId, totalAmount: cents(total), paidAmount: cents(payment.paid), at });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: friendlyError(e, 'Unable to record the received stock.') };

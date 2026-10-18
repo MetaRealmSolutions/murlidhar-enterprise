@@ -85,6 +85,8 @@ export type ReceiveStockTx = TxBase & {
   note?: string;
   /** products.stock was raised by this entry. */
   stockApplied?: boolean;
+  /** Purchase price per unit of this product on this receipt (entered by hand; never the Item Master selling price). Absent on older receipts. */
+  purchasePrice?: number;
   receiptId?: string;
   /** parties/{partyId} (the party's 10-digit mobile number). Older receipts have none until backfilled. */
   partyId?: string;

@@ -1,17 +1,17 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, View, type TextInput } from 'react-native';
+import { Pressable, ScrollView, TextInput, View } from 'react-native';
 
 import { useAuth } from '../../../auth/AuthContext';
 import { isOwner } from '../../../auth/access';
 import { Btn, SearchIcon, T, TextAction, TextField, useTheme } from '../../../components/controls';
 import { Page, SimpleTable, usePageMetrics } from '../../../components/page';
-import { QtyControl } from '../../../components/quantity-control';
 import { Sheet } from '../../../components/sheet';
 import { PaymentBadge, remainingTone } from '../../../components/payment-status';
 import { deleteProduct, newReceiptSubmissionId, paymentOf, receiveStock, updateProduct, useParties, useProductsWithStock, validMobile, type ProductWithStock } from '../../../data/repository';
+import { formatINR, lineTotal, parsePrice, receiptTotal } from '../../../data/receipt-total';
 import { num, rupees } from '../../../mock/data';
-import { qtyOf, stepQty, typeQty, type Quantities } from '../../../mock/give';
+import { qtyOf, typeQty, type Quantities } from '../../../mock/give';
 import { STATUS_LABEL, productStatus, type StockStatus } from '../../../mock/stock-status';
 
 const TNUM = { fontVariant: ['tabular-nums' as const] };
@@ -221,35 +221,49 @@ function EditDialog({ p, onClose }: { p: ProductWithStock; onClose: () => void }
   );
 }
 
-/** Add Stock mode stock cell: a - [new qty] + control with "Current x + New y = total" under it. */
-function AddCell({
-  p,
-  value,
-  phone,
-  onStep,
-  onType,
-  onBlurEmpty,
-  inputRef,
-  onSubmit,
-}: {
-  p: ProductWithStock;
-  value: string;
-  phone: boolean;
-  onStep: (id: string, delta: number) => void;
-  onType: (id: string, text: string) => void;
-  onBlurEmpty: (id: string) => void;
-  inputRef: (el: TextInput | null) => void;
-  onSubmit: () => void;
-}) {
+/** Add Stock mode quantity: a plain number box, 0 by default, typed directly. Whole units only (the stock model counts whole units). */
+function QtyInput({ p, value, onType, inputRef, onSubmit }: { p: ProductWithStock; value: string; onType: (id: string, text: string) => void; inputRef: (el: TextInput | null) => void; onSubmit: () => void }) {
   const t = useTheme();
-  const added = /^\d+$/.test(value) ? Number(value) : 0;
+  const active = (/^\d+$/.test(value) ? Number(value) : 0) > 0;
   return (
-    <View style={{ alignItems: 'flex-end', gap: 3, paddingVertical: 6 }}>
-      <QtyControl verb="Receive" id={p.id} name={p.name} value={value} max={NO_LIMIT} big={false} compact onStep={onStep} onType={onType} onBlurEmpty={onBlurEmpty} inputRef={inputRef} onSubmit={onSubmit} />
-      <T size={12} muted style={TNUM}>
-        Current {num(p.stock)} + New {num(added)} = <T size={12} weight="700" style={{ color: t.text }}>{num(p.stock + added)}</T>
-      </T>
-    </View>
+    <TextInput
+      ref={inputRef}
+      accessibilityLabel={`Receive quantity for ${p.name}`}
+      value={value === '' ? '0' : value}
+      onChangeText={(v) => onType(p.id, v)}
+      onSubmitEditing={onSubmit}
+      blurOnSubmit={false}
+      returnKeyType="next"
+      keyboardType="number-pad"
+      inputMode="numeric"
+      selectTextOnFocus
+      maxLength={8}
+      style={{ width: 84, height: 36, borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, fontSize: 15, fontWeight: '600', textAlign: 'right', color: active ? t.accent : t.text, backgroundColor: t.surface, borderColor: active ? t.accent : t.borderStrong, outlineStyle: 'none', fontVariant: ['tabular-nums'] } as object}
+    />
+  );
+}
+
+/** Add Stock mode purchase price per unit, typed by hand for this receipt (never the Item Master selling price). Up to 2 decimals. */
+function PriceInput({ p, value, onType, inputRef, onSubmit }: { p: ProductWithStock; value: string; onType: (id: string, text: string) => void; inputRef: (el: TextInput | null) => void; onSubmit: () => void }) {
+  const t = useTheme();
+  const bad = value !== '' && parsePrice(value) === null;
+  return (
+    <TextInput
+      ref={inputRef}
+      accessibilityLabel={`Purchase price for ${p.name}`}
+      value={value}
+      onChangeText={(v) => onType(p.id, v)}
+      onSubmitEditing={onSubmit}
+      blurOnSubmit={false}
+      returnKeyType="next"
+      keyboardType="decimal-pad"
+      inputMode="decimal"
+      placeholder="0.00"
+      placeholderTextColor={t.muted}
+      selectTextOnFocus
+      maxLength={10}
+      style={{ width: 96, height: 36, borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, fontSize: 15, textAlign: 'right', color: t.text, backgroundColor: t.surface, borderColor: bad ? t.danger : value !== '' ? t.accent : t.borderStrong, outlineStyle: 'none', fontVariant: ['tabular-nums'] } as object}
+    />
   );
 }
 
@@ -260,7 +274,6 @@ function ReviewDialog({
   totalAmount,
   paidAmount,
   amountError,
-  onTotal,
   onPaid,
   rows,
   saving,
@@ -273,7 +286,6 @@ function ReviewDialog({
   totalAmount: string;
   paidAmount: string;
   amountError: string | null;
-  onTotal: (v: string) => void;
   onPaid: (v: string) => void;
   rows: { p: ProductWithStock; add: number }[];
   saving: boolean;
@@ -300,7 +312,7 @@ function ReviewDialog({
       <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: t.border }}>
         <View style={{ flexDirection: 'row', gap: 12 }}>
           <View style={{ flex: 1 }}>
-            <TextField label="Total Purchase Amount" value={totalAmount} onChangeText={onTotal} keyboardType="decimal-pad" editable={!saving} />
+            <TextField label="Total Purchase Amount" value={totalAmount} editable={false} hint="Sum of the rows: purchase price × quantity." />
           </View>
           <View style={{ flex: 1 }}>
             <TextField label="Paid Amount" value={paidAmount} onChangeText={onPaid} keyboardType="decimal-pad" editable={!saving} error={amountError ?? undefined} />
@@ -373,11 +385,13 @@ export default function StockScreen() {
   const [added, setAdded] = useState<Quantities>({});
   const [partyName, setPartyName] = useState('');
   const [partyPhone, setPartyPhone] = useState('');
-  // What this receipt cost and how much of it is paid now; Remaining and the status follow immediately.
-  // They are typed in the Review Stock dialog and kept here, so Back and re-opening the review keep what was entered.
-  const [totalAmount, setTotalAmount] = useState('0');
+  // Purchase price per product, typed by hand on this receipt (text, so it can be edited freely). The receipt total is derived from these and the
+  // quantities. How much of it is paid now is typed in the Review Stock dialog and kept here, so Back and re-opening the review keep it.
+  const [prices, setPrices] = useState<Record<string, string>>({});
   const [paidAmount, setPaidAmount] = useState('0');
-  const totalNow = Number(totalAmount) || 0;
+  // The receipt total is the sum of the row totals, in whole paise: the same function the save uses.
+  const grandTotal = receiptTotal(products.map((p) => ({ price: parsePrice(prices[p.id] ?? ''), qty: qtyOf(added, p.id) })));
+  const totalNow = grandTotal;
   const paidNow = Number(paidAmount) || 0;
   const amountError = paidNow > totalNow && totalNow >= 0 && paidAmount !== '' ? 'Paid Amount cannot be more than the Total Purchase Amount.' : null;
   const pay = paymentOf(totalNow, amountError ? 0 : paidNow);
@@ -392,25 +406,32 @@ export default function StockScreen() {
   const [showFab, setShowFab] = useState(false); // the header's Add Stock has scrolled out of view
   const addedRef = useRef(added);
   addedRef.current = added;
+  const pricesRef = useRef(prices);
+  pricesRef.current = prices;
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products.filter((p) => (filter === 'all' || productStatus(p) === filter) && p.name.toLowerCase().includes(q));
   }, [products, search, filter]);
 
-  const onStep = useCallback((id: string, d: number) => setAdded(stepQty(addedRef.current, id, d, NO_LIMIT).q), []);
   const onType = useCallback((id: string, text: string) => setAdded(typeQty(addedRef.current, id, text, NO_LIMIT).q), []);
-  const onBlurEmpty = useCallback((id: string) => setAdded((q) => ({ ...q, [id]: '' })), []);
+  // Digits and at most one decimal point with two decimals ("12.5", "59.97"); anything else typed is dropped.
+  const onPrice = useCallback((id: string, text: string) => {
+    const clean = text.replace(/[^0-9.]/g, '').replace(/^\./, '0.').replace(/(\..*)\./g, '$1').replace(/^0+(?=\d)/, '').replace(/(\.\d{2}).*/, '$1');
+    setPrices({ ...pricesRef.current, [id]: clean });
+  }, []);
 
-  const items = products.filter((p) => qtyOf(added, p.id) > 0).map((p) => ({ id: p.id, qty: qtyOf(added, p.id) }));
+  const items = products.filter((p) => qtyOf(added, p.id) > 0).map((p) => ({ id: p.id, qty: qtyOf(added, p.id), price: parsePrice(prices[p.id] ?? '') ?? 0 }));
 
-  // Enter in a quantity box: focus the next VISIBLE product's box (the list as filtered and shown); after the last one, focus the Review
-  // button when there is something to review. Focus only: nothing is reviewed, confirmed or saved by Enter.
+  // Enter: price -> the same row's quantity -> the next VISIBLE product's price (the list as filtered and shown); after the last one, focus the
+  // Review button when there is something to review. Focus only: nothing is reviewed, confirmed or saved by Enter.
   const qtyInputs = useRef<Record<string, TextInput | null>>({});
+  const priceInputs = useRef<Record<string, TextInput | null>>({});
   const reviewButton = useRef<View | null>(null);
+  const nextAfterPrice = (id: string) => qtyInputs.current[id]?.focus();
   const nextQty = (id: string) => {
     const next = list[list.findIndex((x) => x.id === id) + 1];
-    if (next) return qtyInputs.current[next.id]?.focus();
+    if (next) return priceInputs.current[next.id]?.focus();
     qtyInputs.current[id]?.blur();
     if (items.length > 0) (reviewButton.current as { focus?: () => void } | null)?.focus?.();
   };
@@ -421,7 +442,7 @@ export default function StockScreen() {
     setAdded({});
     setPartyName('');
     setPartyPhone('');
-    setTotalAmount('0');
+    setPrices({});
     setPaidAmount('0');
     setError(null);
   };
@@ -431,12 +452,12 @@ export default function StockScreen() {
   const save = async () => {
     if (saving || items.length === 0) return;
     // Checked here, with the dialog still open and every value kept, so the owner can correct and confirm again.
-    if (totalNow <= 0) return setError('Enter the Total Purchase Amount.');
+    if (totalNow <= 0) return setError('Enter a purchase price and quantity.');
     if (amountError) return setError(amountError);
     setSaving(true);
     const key = JSON.stringify({ partyName, partyPhone, totalNow, paidNow, items });
     if (submission.current?.key !== key) submission.current = { key, id: newReceiptSubmissionId() };
-    const result = await receiveStock({ name: partyName, phone: partyPhone }, items, { total: totalNow, paid: paidNow }, submission.current.id);
+    const result = await receiveStock({ name: partyName, phone: partyPhone }, items, { paid: paidNow }, submission.current.id);
     setSaving(false);
     if (!result.ok) return setError(result.error); // the receipt stays exactly as entered
     submission.current = null;
@@ -446,6 +467,9 @@ export default function StockScreen() {
   const review = () => {
     if (!partyName.trim()) return setError('Enter the party name.');
     if (!validMobile(partyPhone)) return setError('Enter a 10-digit mobile number (digits only).');
+    // Every product being received needs its own purchase price; the stock never goes in at an unknown cost.
+    const unpriced = products.find((p) => qtyOf(added, p.id) > 0 && !((parsePrice(prices[p.id] ?? '') ?? 0) > 0));
+    if (unpriced) return setError(`Enter the purchase price for ${unpriced.name}.`);
     setError(null);
     setReviewing(true);
   };
@@ -537,8 +561,10 @@ export default function StockScreen() {
           columns={
             adding
               ? [
-                  { label: 'Item', render: (p) => <NameWithStatus p={p} /> },
-                  { label: 'Stock', width: phone ? 176 : 230, align: 'right', render: (p) => <AddCell p={p} value={added[p.id] ?? ''} phone={phone} onStep={onStep} onType={onType} onBlurEmpty={onBlurEmpty} inputRef={(el) => { qtyInputs.current[p.id] = el; }} onSubmit={() => nextQty(p.id)} /> },
+                  { label: 'Product', render: (p) => <NameWithStatus p={p} /> },
+                  { label: 'Purchase Price (₹)', width: phone ? 116 : 150, align: 'right', render: (p) => <PriceInput p={p} value={prices[p.id] ?? ''} onType={onPrice} inputRef={(el) => { priceInputs.current[p.id] = el; }} onSubmit={() => nextAfterPrice(p.id)} /> },
+                  { label: 'Qty', width: phone ? 100 : 130, align: 'right', render: (p) => <QtyInput p={p} value={added[p.id] ?? ''} onType={onType} inputRef={(el) => { qtyInputs.current[p.id] = el; }} onSubmit={() => nextQty(p.id)} /> },
+                  { label: 'Total (₹)', width: phone ? 96 : 130, align: 'right', weight: '600', render: (p) => formatINR(lineTotal(parsePrice(prices[p.id] ?? ''), qtyOf(added, p.id))) },
                 ]
               : [
                   { label: 'Item', render: (p) => <NameWithStatus p={p} /> },
@@ -549,6 +575,7 @@ export default function StockScreen() {
           rows={list}
           keyOf={(p) => p.id}
           empty={emptyNote}
+          foot={adding ? { Product: 'Total', Qty: num(products.reduce((n, p) => n + qtyOf(added, p.id), 0)), 'Total (₹)': formatINR(grandTotal) } : undefined}
         />
         )}
         </View>
@@ -580,7 +607,7 @@ export default function StockScreen() {
         </View>
       )}
 
-      {reviewing && <ReviewDialog pay={pay} totalAmount={totalAmount} paidAmount={paidAmount} amountError={amountError} onTotal={(v) => { setTotalAmount(money(v)); setError(null); }} onPaid={(v) => { setPaidAmount(money(v)); setError(null); }} party={{ name: partyName.trim(), phone: partyPhone.trim() }} rows={products.filter((p) => qtyOf(added, p.id) > 0).map((p) => ({ p, add: qtyOf(added, p.id) }))} saving={saving} error={error} onBack={() => { setReviewing(false); setError(null); }} onConfirm={save} />}
+      {reviewing && <ReviewDialog pay={pay} totalAmount={String(totalNow)} paidAmount={paidAmount} amountError={amountError} onPaid={(v) => { setPaidAmount(money(v)); setError(null); }} party={{ name: partyName.trim(), phone: partyPhone.trim() }} rows={products.filter((p) => qtyOf(added, p.id) > 0).map((p) => ({ p, add: qtyOf(added, p.id) }))} saving={saving} error={error} onBack={() => { setReviewing(false); setError(null); }} onConfirm={save} />}
 
       {adding && (
         <View style={[{ backgroundColor: t.surface, borderTopWidth: 1, borderTopColor: t.border }, { boxShadow: '0 -2px 10px rgba(17,24,39,0.06)' } as object]}>

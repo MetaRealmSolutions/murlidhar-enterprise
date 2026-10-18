@@ -14,7 +14,8 @@
   "exclude": [
     "src/data/db/seed.ts",
     "src/data/db/storage.ts",
-    "scripts/opening-stock.test.ts"
+    "scripts/opening-stock.test.ts",
+    "scripts/receipt-total.test.ts"
   ],
   "include": [
     "**/*.ts",

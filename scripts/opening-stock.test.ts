@@ -1,4 +1,4 @@
-git push// Offline tests for the Opening Stock rules (src/data/opening-stock.ts). No Firestore: a small in-memory store stands in for the
+// Offline tests for the Opening Stock rules (src/data/opening-stock.ts). No Firestore: a small in-memory store stands in for the
 // products collection and applies the same plan the real transaction applies. The product's history (receipts, bills, allocations) is
 // kept next to it so the tests can show that saving a count neither reads it, nor changes it, nor is blocked by it. `reopen` models closing
 // the app and coming back: the store is the only thing that survives. Run: node scripts/run-opening-stock-tests.cjs
